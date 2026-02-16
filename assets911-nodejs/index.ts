@@ -5,25 +5,19 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import dbConnect from './config/dbConnect';
-
 import authRouter from './routes/general_users/auth.routes';
 import assetRouter from './routes/general_users/asset.routes';
 import userRouter from './routes/general_users/user.routes';
 import publicRouter from './routes/general_users/public.routes';
-
 import ecfatumAuthRouter from './routes/ecfatum/auth.routes';
 import ecfatumInstitutionRouter from './routes/ecfatum/institution.routes';
 import ecfatumAssetsRouter from './routes/ecfatum/assets.routes';
-
 import institutionAuthRouter from './routes/institutions/auth.routes';
 import institutionAssetRouter from './routes/institutions/asset.routes';
-
 import policeAuthRouter from './routes/police/auth.routes';
 import policeAssetRouter from './routes/police/assets.routes';
-
 import brandRouter from './routes/brands/index';
 import insuranceRouter from './routes/insurance';
-
 import serverSession from './config/serverSession';
 import credentials from './config/credentials';
 import { corsOptions } from './config/corsOptions';

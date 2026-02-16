@@ -1,68 +1,67 @@
 # Assets911 Backend README
 
+## Stack
+
+- Node.js + Express
+- TypeScript
+- PostgreSQL + Prisma
+
 ## Getting Started
 
-To start the app, follow these steps:
+1. Install dependencies:
 
-1. Clone this repository to your local machine:
-
-   ```shell
-   git clone <repository-url>
+   ```bash
+   npm install
    ```
 
-2. Navigate to the project directory:
+2. Ensure environment variables are set in `.env`:
 
-   ```shell
-   cd <project-directory>
+   ```env
+   DATABASE_URL=postgresql://asset911_user:asset911_password@localhost:5432/asset911_db?schema=public
+   PORT=5000
+   JWT_SECRET=your-secret-key-here-change-this-in-production
+   SMS_API_USERNAME=
+   SMS_API_PASSWORD=
+   EMAIL_API=
    ```
 
-3. Install all dependencies using Yarn:
+3. Generate Prisma client:
 
-   ```shell
-   yarn
+   ```bash
+   npm run prisma:generate
    ```
 
-## Development Server
+4. Run database migrations:
 
-To start the development server, use the following command:
+   ```bash
+   npm run prisma:migrate
+   ```
 
-```shell
-yarn run dev
-```
+5. Start development server:
 
-This will launch the Node.js server, allowing you to develop and test your backend.
+   ```bash
+   npm run dev
+   ```
+
+## Useful Commands
+
+- `npm run build` - Compile TypeScript to `dist/`
+- `npm run start` - Run compiled backend
+- `npm run prisma:studio` - Open Prisma Studio
+- `npm run prisma:seed` - Seed development data
 
 ## Project Structure
 
-The project structure may look like this:
-
 ```
-/
+assets911-nodejs/
 |-- config/
 |-- controllers/
-|-- models/
-|-- node_modules/
+|-- helpers/
+|-- prisma/
 |-- routes/
+|-- types/
 |-- utils/
-|-- .gitIgnore
-|-- index.js
+|-- index.ts
 |-- package.json
-|-- readme.md
-|-- yarn.lock
+|-- tsconfig.json
 ```
-
-- `node_modules`: Contains all the project's dependencies.
-
-- `config`: Contains database and jwt configurations.
-- `controllers`: Controllers for handling various routes and business logic.
-- `models`: Mongoose models for interacting with the database.
-- `routes`: Express.js routes for defining API endpoints.
-- `index.js`: The main application file where you set up your Express app.
-
-- `package.json`: Contains project metadata and dependencies.
-
-- `README.md`: This file, providing instructions on setting up and running the app.
-
-- `yarn.lock`: Yarn's lock file, ensuring consistent dependency versions.
-
-Happy coding!

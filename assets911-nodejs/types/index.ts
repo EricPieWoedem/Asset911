@@ -62,3 +62,9 @@ export interface ApiResponse<T = unknown> {
   message?: string;
   error?: string;
 }
+
+export interface AuthRequest {
+  userId: string;
+  institutionId?: string;
+  permissions?: number[];
+}
