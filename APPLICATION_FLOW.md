@@ -54,7 +54,7 @@ Asset911/
 
 ---
 
-## Technology Stack
+  ## Technology Stack
 
 ### Backend Technologies
 
