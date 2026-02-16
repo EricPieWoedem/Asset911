@@ -1,0 +1,48 @@
+name: deploy-api-dev
+
+on:
+  push:
+    branches:
+      - dev
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push to Docker Hub
+        uses: actions/checkout@v3
+      - run: docker build -t ecfatum/assets911-web:dev .
+      - run: docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      - run: docker push ecfatum/assets911-web:dev
+
+      # - name: Copy Files to Server
+      #   uses: appleboy/scp-action@master
+      #   with:
+      #     host: ${{ secrets.SSH_HOST }}
+      #     username: ${{ secrets.SSH_USERNAME }}
+      #     password: ${{ secrets.SSH_PASSWORD }}
+      #     source: "Dockerfile, Dockerfile.*"
+      #     target: "staging/assets911/web"
+      #     rm: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Deploy Latest
+        uses: appleboy/ssh-action@master
+        timeout-minutes: 20
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd staging/assets911
+            docker pull ecfatum/assets911-web:dev
+            docker compose up --build -d

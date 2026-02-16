@@ -1,0 +1,41 @@
+const User = require('../../models/general_users/user.model');
+const fs = require('fs');
+
+const checkExistingUsers = async (req, res) => {
+  try {
+    const usersList = req.body;
+    const resultsArray = [];
+    const uniquePhoneNumbers = [
+      ...new Set(usersList.map(user => user.phoneNumber)),
+    ];
+    const uniquePhoneNumbersArray = [...uniquePhoneNumbers].map(
+      phoneNumber => ({ phoneNumber: phoneNumber })
+    );
+
+    for (const user of uniquePhoneNumbersArray) {
+      const phoneNumber = user.phoneNumber;
+      const foundUser = await User.findOne({ phoneNumber });
+
+      if (foundUser) {
+        resultsArray.push({
+          phoneNumber,
+          status: 'Found',
+          name: foundUser?.name,
+        });
+      } else {
+        resultsArray.push({
+          phoneNumber,
+          status: 'Not Found',
+        });
+      }
+    }
+
+    fs.writeFileSync('./results.json', JSON.stringify(resultsArray));
+    res.status(200).json('Results saved');
+  } catch (error) {
+    console.log(error);
+    res.status(500).json('Internal server error');
+  }
+};
+
+module.exports = { checkExistingUsers };
