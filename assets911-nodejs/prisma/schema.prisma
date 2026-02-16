@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Provider {
+  google
+  phoneNumber
+}
+
+enum AssetStatus {
+  lost
+  sold
+  okay
+  damaged
+  for_sale
+}
+
+enum TransferStatus {
+  pending
+  confirmed
+  cancelled
+}
+
+model User {
+  id              String    @id @default(uuid())
+  name            String?
+  email           String?
+  image           String?
+  provider        Provider
+  phoneNumber     String?
+  ghanaCardNumber String?
+  password        String
+  refreshToken    String?
+  deleted         Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  seedOtp         String?   @unique
+
+  assets          Asset[]
+  transfersFrom   TransferRecord[] @relation("TransferFrom")
+  transfersTo     TransferRecord[] @relation("TransferTo")
+
+  @@index([email])
+  @@index([phoneNumber])
+  @@map("users")
+}
+
+model Asset {
+  id                    String    @id @default(uuid())
+  model                 String
+  brand                 String
+  name                  String
+  type                  String
+  categoryType          String?
+  uniqueNumber          String    @unique
+  dateOfPurchase        String
+  price                 Float
+  purchaseReceipt       String?
+  identificationDetails String
+  otherDetails          String?
+  images                String[]
+  registrationAddress   String
+  presentLocation       String?
+  status                AssetStatus
+  additionalCategoryData Json?
+
+  ownerId               String
+  owner                 User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  recentTransferRecordId String?
+  recentTransferRecord   TransferRecord? @relation("AssetRecentTransfer", fields: [recentTransferRecordId], references: [id])
+
+  transferRecords       TransferRecord[] @relation("AssetTransfers")
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([ownerId])
+  @@index([uniqueNumber])
+  @@index([status])
+  @@map("assets")
+}
+
+model TransferRecord {
+  id                String         @id @default(uuid())
+  assetId           String
+  asset             Asset          @relation("AssetTransfers", fields: [assetId], references: [id], onDelete: Cascade)
+  
+  fromId            String
+  from              User           @relation("TransferFrom", fields: [fromId], references: [id])
+  
+  toId               String?
+  to                 User?          @relation("TransferTo", fields: [toId], references: [id])
+  
+  transferDate       String
+  notes              String?
+  confirmationCode   String?
+  notAnExistingUser  String?
+  status             TransferStatus @default(pending)
+
+  recentTransferFor  Asset[]        @relation("AssetRecentTransfer")
+
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@index([assetId])
+  @@index([fromId])
+  @@index([toId])
+  @@index([status])
+  @@map("transfer_records")
+}
+
+model Institution {
+  id          String    @id @default(uuid())
+  name        String
+  phoneNumber String
+  address     String
+  email       String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  admins      InstitutionAdmin[]
+  assets      InstitutionAsset[]
+
+  @@index([email])
+  @@map("institutions")
+}
+
+model InstitutionAdmin {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  password      String
+  permissions   Int[]
+  refreshToken  String?
+  seedOtp       String?   @unique
+
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@index([institutionId])
+  @@map("institution_admins")
+}
+
+model InstitutionAsset {
+  id                    String    @id @default(uuid())
+  model                 String?
+  brand                 String?
+  type                  String
+  categoryType          String?
+  name                  String
+  uniqueNumber          String?
+  dateOfPurchase        String?
+  price                 Float
+  purchaseReceipt       String
+  identificationDetails String
+  otherDetails          String?
+  images                String[]
+  registrationAddress   String
+  assetLocation         String
+  status                AssetStatus @default(okay)
+  properties            Json?
+  additionalCategoryData Json?
+
+  ownerId               String
+  owner                 Institution @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  assignedTo            Json?      @default("{\"staffName\": \"\"}")
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([ownerId])
+  @@index([status])
+  @@map("institution_assets")
+}
+
+model EcfatumAdmin {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  password     String
+  permissions  Int[]
+  refreshToken String?
+  seedOtp      String?   @unique
+  institutionId String   @default("ecfatum")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([email])
+  @@map("ecfatum_admins")
+}
+
+model Officer {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  name          String
+  idNumber      String
+  refreshToken  String?
+  seedOtp       String?   @unique
+  institutionId Json      @default("{\"id\": \"police\"}")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@map("officers")
+}
+
+model Brand {
+  id         String    @id @default(uuid())
+  type       String
+  properties Json
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([type])
+  @@map("brands")
+}
+
+model Category {
+  id           String    @id @default(uuid())
+  name         String    @unique
+  categoryType String[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("categories")
+}
+
+model AssetType {
+  id             String    @id @default(uuid())
+  categoryType   String    @unique
+  brandsAndModels Json
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("asset_types")
+}

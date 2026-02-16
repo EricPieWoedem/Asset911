@@ -50,3 +50,7 @@ coverage/
 # Misc
 .cache/
 .temp/
+
+# .md files
+UPGRAGE_PLAN.md
+APPLICATION_FLOW.md
