@@ -1,9 +1,19 @@
-//controllers to manage all assets on ecfatums platform
+const prisma = require('../../config/prisma');
 
-const Assets = require('../../models/general_users/asset.model');
-const InstitutionAssets = require('../../models/institutions/asset.model');
+const mapAssetForResponse = asset => ({
+  ...asset,
+  status: asset.status === 'for_sale' ? 'for sale' : asset.status,
+  purchaseReciept: asset.purchaseReceipt,
+});
 
-//Public user assets management
+const allowedPublicSearchFields = new Set([
+  'uniqueNumber',
+  'name',
+  'brand',
+  'model',
+  'type',
+  'status',
+]);
 
 const getAllPublicAssets = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
@@ -11,37 +21,29 @@ const getAllPublicAssets = async (req, res) => {
   let searchField = req.query?.searchField || 'uniqueNumber';
   let search = req.query?.search || '';
   try {
-    const countPipeline = [
-      { $match: { [searchField]: { $regex: new RegExp(search, 'i') } } },
-      { $count: 'total' },
-    ];
-
-    const countResult = await Assets.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No assets found');
-    }
-
-    const total = countResult[0].total;
+    const normalizedSearchField = allowedPublicSearchFields.has(searchField)
+      ? searchField
+      : 'uniqueNumber';
+    const where = {
+      [normalizedSearchField]: { contains: search, mode: 'insensitive' },
+    };
+    const total = await prisma.asset.count({ where });
+    if (!total) return res.status(404).json('No assets found');
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
 
-    const retrievalPipeline = [
-      { $match: { [searchField]: { $regex: new RegExp(search, 'i') } } },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await Assets.aggregate(retrievalPipeline);
-    if (!results) {
-      return res.status(404).json('No assets found');
-    }
+    const results = await prisma.asset.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
 
     res.status(200).json({
-      assets: results,
+      assets: results.map(mapAssetForResponse),
       totalPages: Math.ceil(total / pageSize),
       total,
       currentPage: pageNumber,
@@ -53,15 +55,16 @@ const getAllPublicAssets = async (req, res) => {
 
 const getPublicAssetById = async (req, res) => {
   try {
-    const asset = await Assets.findById(req.params.id).populate('owner').exec();
+    const asset = await prisma.asset.findUnique({
+      where: { id: req.params.id },
+      include: { owner: true },
+    });
     if (!asset) return res.status(404).json('Asset not found');
-    res.status(200).json(asset);
+    res.status(200).json(mapAssetForResponse(asset));
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
 };
-
-//institution assets management
 
 const getAssetsOfAllOnboardedInstittutions = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
@@ -71,48 +74,29 @@ const getAssetsOfAllOnboardedInstittutions = async (req, res) => {
   let brandSearch = req.query?.brandSearch || '';
 
   try {
-    const countPipeline = [
-      {
-        $match: {
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(uniqueNumberSearch, 'i') } },
-            { institutionId: { $regex: new RegExp(institutionSearch, 'i') } },
-            { brand: { $regex: new RegExp(brandSearch, 'i') } },
-          ],
-        },
-      },
-      { $count: 'total' },
-    ];
-    const countResult = await InstitutionAssets.aggregate(countPipeline);
-    if (!countResult[0])
-      return res.status(404).json('No assets found at count');
-    const total = countResult[0].total;
+    const where = {
+      OR: [
+        { uniqueNumber: { contains: uniqueNumberSearch, mode: 'insensitive' } },
+        { ownerId: { contains: institutionSearch, mode: 'insensitive' } },
+        { brand: { contains: brandSearch, mode: 'insensitive' } },
+      ],
+    };
+    const total = await prisma.institutionAsset.count({ where });
+    if (!total) return res.status(404).json('No assets found at count');
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
 
-    const retrievalPipeline = [
-      {
-        $match: {
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(uniqueNumberSearch, 'i') } },
-            { institutionId: { $regex: new RegExp(institutionSearch, 'i') } },
-            { brand: { $regex: new RegExp(brandSearch, 'i') } },
-          ],
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await InstitutionAssets.aggregate(retrievalPipeline);
-    if (!results) {
-      return res.status(404).json('No assets found');
-    }
+    const results = await prisma.institutionAsset.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
     res.status(200).json({
-      assets: results,
+      assets: results.map(mapAssetForResponse),
       totalPages: Math.ceil(total / pageSize),
       total,
       currentPage: pageNumber,

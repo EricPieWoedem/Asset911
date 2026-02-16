@@ -1,7 +1,4 @@
-const Asset = require('../../models/general_users/asset.model');
-const DeletedAsset = require('../../models/general_users/deletedAsset.model');
-const User = require('../../models/general_users/user.model');
-const TransferAsset = require('../../models/general_users/transfer.model');
+const prisma = require('../../config/prisma');
 const {
   generateOTP,
   createTransferToken,
@@ -9,44 +6,65 @@ const {
 } = require('../../config/otp');
 const { sendSMS } = require('../../utils/sms');
 const { sendEmail } = require('../../utils/email');
-const mongoose = require('mongoose');
 
 const ghanaPhoneNumberRegex =
   /^(?:(?:\+|00)233|0)([23456]\d{8}|[2359]([35]3|[49]9)\d{7})$/;
-//user specifc asset Actions
+
+const toDbStatus = status => {
+  if (status === 'for sale') return 'for_sale';
+  return status;
+};
+
+const fromDbStatus = status => {
+  if (status === 'for_sale') return 'for sale';
+  return status;
+};
+
+const mapAssetForResponse = asset => ({
+  ...asset,
+  status: fromDbStatus(asset.status),
+  purchaseReciept: asset.purchaseReceipt,
+});
 
 const addAsset = async (req, res) => {
-  console.log(req.userId);
   try {
-    const existingAsset = await Asset.findOne({
-      uniqueNumber: req.body.uniqueNumber,
+    const existingAsset = await prisma.asset.findUnique({
+      where: { uniqueNumber: req.body.uniqueNumber },
     });
 
-    if (existingAsset) {
-      return res.status(409).json('Asset already exists');
-    } else {
-      const newAsset = await Asset.create({
-        ...req.body,
-        status: 'okay',
-        owner: req.userId,
-        name: `${req.body.brand} ${req.body.model}`,
-      });
+    if (existingAsset) return res.status(409).json('Asset already exists');
 
-      if (newAsset) {
-        const userDetails = await User.findById(req.userId);
-        const message = `Your asset ${newAsset.name} with unique number ${newAsset.uniqueNumber} has been added to your portfolio.`;
-        if (userDetails.phoneNumber) {
-          await sendSMS(userDetails.phoneNumber, message);
-          userDetails.email &&
-            (await sendEmail(userDetails.email, 'New Asset', message));
-        } else {
-          await sendEmail(userDetails.email, 'New Asset', message);
-        }
-        res.status(200).json('Asset Created');
-      } else {
-        res.status(400).json('Failed to create asset');
-      }
+    const newAsset = await prisma.asset.create({
+      data: {
+        model: req.body.model,
+        brand: req.body.brand,
+        name: `${req.body.brand} ${req.body.model}`,
+        type: req.body.type,
+        categoryType: req.body.categoryType || null,
+        uniqueNumber: req.body.uniqueNumber,
+        dateOfPurchase: req.body.dateOfPurchase,
+        price: Number(req.body.price),
+        purchaseReceipt: req.body.purchaseReceipt || req.body.purchaseReciept || null,
+        identificationDetails: req.body.identificationDetails,
+        otherDetails: req.body.otherDetails || null,
+        images: req.body.images || [],
+        registrationAddress: req.body.registrationAddress,
+        presentLocation: req.body.presentLocation || null,
+        status: 'okay',
+        additionalCategoryData: req.body.additionalCategoryData || undefined,
+        ownerId: req.userId,
+      },
+    });
+
+    const userDetails = await prisma.user.findUnique({ where: { id: req.userId } });
+    const message = `Your asset ${newAsset.name} with unique number ${newAsset.uniqueNumber} has been added to your portfolio.`;
+    if (userDetails?.phoneNumber) {
+      await sendSMS(userDetails.phoneNumber, message);
+      if (userDetails.email) await sendEmail(userDetails.email, 'New Asset', message);
+    } else if (userDetails?.email) {
+      await sendEmail(userDetails.email, 'New Asset', message);
     }
+    return res.status(200).json('Asset Created');
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -54,26 +72,36 @@ const addAsset = async (req, res) => {
 
 const updateAsset = async (req, res) => {
   try {
-    const updatedAsset = await Asset.findOneAndUpdate(
-      { _id: req.params.id, owner: req.userId },
-      { ...req.body },
-      { new: true }
-    );
-    if (updatedAsset) {
-      res.status(200).json('Asset Updated');
-    } else {
+    const existing = await prisma.asset.findFirst({
+      where: { id: req.params.id, ownerId: req.userId },
+    });
+    if (!existing) {
       res
         .status(400)
         .json(
           'Failed to update asset, confirm if user is the owner of the asset'
         );
+      return;
     }
+
+    const data = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(data, 'status')) {
+      data.status = toDbStatus(data.status);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'purchaseReciept')) {
+      data.purchaseReceipt = data.purchaseReciept;
+      delete data.purchaseReciept;
+    }
+
+    await prisma.asset.update({
+      where: { id: req.params.id },
+      data,
+    });
+    res.status(200).json('Asset Updated');
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
 };
-
-//Asset Transfer
 
 const transferAsset = async (req, res) => {
   const { newOwner, notes, transferDate } = req.body;
@@ -81,38 +109,44 @@ const transferAsset = async (req, res) => {
   const otpToken = createTransferToken(otp);
 
   try {
-    const asset = await Asset.findOne({
-      _id: req.params.id,
-      owner: req.userId,
+    const asset = await prisma.asset.findFirst({
+      where: {
+        id: req.params.id,
+        ownerId: req.userId,
+      },
     });
 
     if (!asset) return res.status(404).json('Asset not found');
 
     let existingUser;
     if (!ghanaPhoneNumberRegex.test(newOwner)) {
-      existingUser = await User.findOne({ email: newOwner });
+      existingUser = await prisma.user.findFirst({ where: { email: newOwner } });
     } else {
-      existingUser = await User.findOne({ phoneNumber: newOwner });
+      existingUser = await prisma.user.findFirst({ where: { phoneNumber: newOwner } });
     }
 
     let transferRecord;
     if (!existingUser) {
-      transferRecord = await TransferAsset.create({
-        assetId: req.params.id,
-        from: req.userId,
-        notAnExistingUser: newOwner,
-        confirmationCode: otpToken,
-        notes,
-        transferDate,
+      transferRecord = await prisma.transferRecord.create({
+        data: {
+          assetId: req.params.id,
+          fromId: req.userId,
+          notAnExistingUser: newOwner,
+          confirmationCode: otpToken,
+          notes,
+          transferDate,
+        },
       });
     } else {
-      transferRecord = await TransferAsset.create({
-        assetId: req.params.id,
-        from: req.userId,
-        to: existingUser.id,
-        confirmationCode: otpToken,
-        notes,
-        transferDate,
+      transferRecord = await prisma.transferRecord.create({
+        data: {
+          assetId: req.params.id,
+          fromId: req.userId,
+          toId: existingUser.id,
+          confirmationCode: otpToken,
+          notes,
+          transferDate,
+        },
       });
     }
 
@@ -120,22 +154,23 @@ const transferAsset = async (req, res) => {
       return res.status(400).json('Failed to transfer asset');
     }
 
-    asset.recentTransferRecord = transferRecord.id;
-    const result = await asset.save();
+    await prisma.asset.update({
+      where: { id: req.params.id },
+      data: { recentTransferRecordId: transferRecord.id },
+    });
 
-    if (!result) return res.status(400).json('Failed to transfer asset');
-
-    const presentOwner = await User.findById(req.userId);
+    const presentOwner = await prisma.user.findUnique({ where: { id: req.userId } });
     const message = `Please give the following code ${otp} to the new owner of your ${asset.brand} ${asset.model} with serial no. ${asset.uniqueNumber}`;
-    if (presentOwner.phoneNumber) {
+    if (presentOwner?.phoneNumber) {
       await sendSMS(presentOwner.phoneNumber, message);
-      presentOwner.email &&
-        (await sendEmail(presentOwner.email, 'Asset Transfer', message));
-    } else {
+      if (presentOwner.email) {
+        await sendEmail(presentOwner.email, 'Asset Transfer', message);
+      }
+    } else if (presentOwner?.email) {
       await sendEmail(presentOwner.email, 'Asset Transfer', message);
     }
 
-    const newOwnerMessage = `You have been transferred a ${asset.brand} ${asset.model} from ${presentOwner.name} with serial no. ${asset.uniqueNumber}. Login at https://asset911.com`;
+    const newOwnerMessage = `You have been transferred a ${asset.brand} ${asset.model} from ${presentOwner?.name || 'an owner'} with serial no. ${asset.uniqueNumber}. Login at https://asset911.com`;
     if (ghanaPhoneNumberRegex.test(newOwner)) {
       await sendSMS(newOwner, newOwnerMessage);
     } else {
@@ -150,15 +185,19 @@ const transferAsset = async (req, res) => {
 
 const cancelAssetTransfer = async (req, res) => {
   try {
-    const transferToCancel = await TransferAsset.findById(req.params.id);
+    const transferToCancel = await prisma.transferRecord.findUnique({
+      where: { id: req.params.id },
+    });
     if (!transferToCancel)
       return res.status(404).json('Transfer record not found');
-    if (transferToCancel.from.toString() !== req.userId) {
+    if (transferToCancel.fromId !== req.userId) {
       return res.status(401).json('Unauthorized');
     }
-    transferToCancel.status = 'cancelled';
-    const result = await transferToCancel.save();
-    if (result) return res.status(200).json('Transfer cancelled');
+    await prisma.transferRecord.update({
+      where: { id: transferToCancel.id },
+      data: { status: 'cancelled' },
+    });
+    return res.status(200).json('Transfer cancelled');
     res.status(400).json('Failed to cancel transfer');
   } catch (error) {
     res.status(500).json('Internal Server Error');
@@ -169,13 +208,15 @@ const confirmTransfer = async (req, res) => {
   const { code } = req.body;
   const assetId = req.params.id;
   try {
-    const user = await User.findById(req.userId);
-    const asset = await Asset.findById(assetId);
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    const asset = await prisma.asset.findUnique({ where: { id: assetId } });
 
     if (!asset) return res.status(404).json('Asset not found');
-    const transferRecord = await TransferAsset.findOne({
-      assetId,
-      _id: asset.recentTransferRecord,
+    const transferRecord = await prisma.transferRecord.findFirst({
+      where: {
+        assetId,
+        id: asset.recentTransferRecordId,
+      },
     });
 
     if (!transferRecord) {
@@ -183,8 +224,8 @@ const confirmTransfer = async (req, res) => {
     }
 
     if (
-      req.userId != transferRecord.to?.toString() &&
-      user.phoneNumber !== transferRecord.notAnExistingUser
+      req.userId !== transferRecord.toId &&
+      user?.phoneNumber !== transferRecord.notAnExistingUser
     ) {
       return res.status(401).json('Unauthorized');
     }
@@ -193,12 +234,14 @@ const confirmTransfer = async (req, res) => {
       return res.status(400).json('Incorrect code');
     }
 
-    asset.owner = req.userId;
-    transferRecord.to = req.userId;
-    transferRecord.status = 'complete';
-
-    const updatedAsset = await asset.save();
-    const updatedTransferRecord = await transferRecord.save();
+    const updatedAsset = await prisma.asset.update({
+      where: { id: asset.id },
+      data: { ownerId: req.userId },
+    });
+    const updatedTransferRecord = await prisma.transferRecord.update({
+      where: { id: transferRecord.id },
+      data: { toId: req.userId, status: 'confirmed' },
+    });
 
     if (updatedAsset && updatedTransferRecord) {
       return res.status(200).json('Asset transferred');
@@ -214,31 +257,31 @@ const resendTransferConfirmationCode = async (req, res) => {
   const otp = generateOTP(4);
   const otpToken = createTransferToken(otp);
   try {
-    const transferRecord = await TransferAsset.findById(req.params.id);
+    const transferRecord = await prisma.transferRecord.findUnique({
+      where: { id: req.params.id },
+    });
     if (!transferRecord) {
       return res.status(404).json('Transfer record not found');
     }
 
-    if (transferRecord.from._id.toString() !== req.userId) {
+    if (transferRecord.fromId !== req.userId) {
       return res.status(401).json('Unauthorized');
     }
 
-    transferRecord.confirmationCode = otpToken;
-    const updatedTransferRecord = await transferRecord.save();
-    if (!updatedTransferRecord) {
-      return res.status(400).json('Failed to generate otp');
-    }
+    await prisma.transferRecord.update({
+      where: { id: transferRecord.id },
+      data: { confirmationCode: otpToken },
+    });
 
-    const presentOwner = await User.findById(req.userId);
+    const presentOwner = await prisma.user.findUnique({ where: { id: req.userId } });
     const message = `Your new transfer confirmation code is ${otp}`;
 
-    console.log(message);
-
-    if (presentOwner.phoneNumber) {
+    if (presentOwner?.phoneNumber) {
       await sendSMS(presentOwner.phoneNumber, message);
-      presentOwner.email &&
-        (await sendEmail(presentOwner.email, 'Asset Transfer', message));
-    } else {
+      if (presentOwner.email) {
+        await sendEmail(presentOwner.email, 'Asset Transfer', message);
+      }
+    } else if (presentOwner?.email) {
       await sendEmail(presentOwner.email, 'Asset Transfer', message);
     }
 
@@ -249,74 +292,39 @@ const resendTransferConfirmationCode = async (req, res) => {
 };
 
 const getTransferredAssets = async (req, res) => {
-  let pageNumber = req.query.pageNumber || 1;
-  let pageSize = req.query.pageSize || 10;
-  const search = req.query.search || '.*';
-  const userId = new mongoose.Types.ObjectId(req.userId);
+  let pageNumber = Number(req.query.pageNumber || 1);
+  let pageSize = Number(req.query.pageSize || 10);
+  const search = req.query.search || '';
 
   try {
-    const countPipeline = [
-      {
-        $match: {
-          from: userId,
-        },
+    const baseWhere = {
+      fromId: req.userId,
+      asset: {
+        uniqueNumber: { contains: search, mode: 'insensitive' },
       },
-      {
-        $lookup: {
-          from: 'assets',
-          localField: 'assetId',
-          foreignField: '_id',
-          as: 'asset',
-        },
-      },
-      { $unwind: '$asset' },
-      { $match: { 'asset.uniqueNumber': { $regex: new RegExp(search, 'i') } } },
-      { $count: 'total' },
-    ];
-
-    const countResult = await TransferAsset.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No assets found');
-    }
-
-    const total = countResult[0].total;
+    };
+    const total = await prisma.transferRecord.count({ where: baseWhere });
+    if (!total) return res.status(404).json('No assets found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
-
-    const retrievalPipeline = [
-      {
-        $match: {
-          from: userId,
-        },
-      },
-      {
-        $lookup: {
-          from: 'assets',
-          localField: 'assetId',
-          foreignField: '_id',
-          as: 'asset',
-        },
-      },
-      { $unwind: '$asset' },
-      { $match: { 'asset.uniqueNumber': { $regex: new RegExp(search, 'i') } } },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await TransferAsset.aggregate(retrievalPipeline);
-
-    if (!results[0]) {
-      return res.status(404).json('No assets found');
-    }
+    const results = await prisma.transferRecord.findMany({
+      where: baseWhere,
+      include: { asset: true, from: true, to: true },
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
 
     const totalPages = Math.ceil(total / pageSize);
     res.json({
-      transferredAssets: results,
+      transferredAssets: results.map(r => ({
+        ...r,
+        asset: r.asset ? mapAssetForResponse(r.asset) : null,
+      })),
       totalPages,
       currentPage: pageNumber,
       count: total,
@@ -327,80 +335,41 @@ const getTransferredAssets = async (req, res) => {
 };
 
 const getRecievedAssets = async (req, res) => {
-  let pageNumber = req.query.pageNumber || 1;
-  let pageSize = req.query.pageSize || 10;
-  const search = req.query.search || '.*';
-  const userId = new mongoose.Types.ObjectId(req.userId);
+  let pageNumber = Number(req.query.pageNumber || 1);
+  let pageSize = Number(req.query.pageSize || 10);
+  const search = req.query.search || '';
 
   try {
-    const user = await User.findById(req.userId);
-    const countPipeline = [
-      {
-        $match: {
-          $or: [
-            { notAnExistingUser: user?.phoneNumber || user?.email },
-            { to: userId },
-          ],
-        },
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    const ownerIdentifier = user?.phoneNumber || user?.email || '';
+    const where = {
+      OR: [{ notAnExistingUser: ownerIdentifier }, { toId: req.userId }],
+      asset: {
+        uniqueNumber: { contains: search, mode: 'insensitive' },
       },
-      {
-        $lookup: {
-          from: 'assets',
-          localField: 'assetId',
-          foreignField: '_id',
-          as: 'asset',
-        },
-      },
-      { $unwind: '$asset' },
-      { $match: { 'asset.uniqueNumber': { $regex: new RegExp(search, 'i') } } },
-      { $count: 'total' },
-    ];
-
-    const countResult = await TransferAsset.aggregate(countPipeline);
-    if (!countResult[0]) {
-      return res.status(404).json('No assets found');
-    }
-
-    const total = countResult[0].total;
+    };
+    const total = await prisma.transferRecord.count({ where });
+    if (!total) return res.status(404).json('No assets found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
-
-    const retrievalPipeline = [
-      {
-        $match: {
-          $or: [
-            { notAnExistingUser: user?.phoneNumber || user?.email },
-            { to: userId },
-          ],
-        },
-      },
-      {
-        $lookup: {
-          from: 'assets',
-          localField: 'assetId',
-          foreignField: '_id',
-          as: 'asset',
-        },
-      },
-      { $unwind: '$asset' },
-      { $match: { 'asset.uniqueNumber': { $regex: new RegExp(search, 'i') } } },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await TransferAsset.aggregate(retrievalPipeline);
-
-    if (!results[0]) {
-      return res.status(404).json('No assets found');
-    }
+    const results = await prisma.transferRecord.findMany({
+      where,
+      include: { asset: true, from: true, to: true },
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
 
     const totalPages = Math.ceil(total / pageSize);
     res.json({
-      recievedAssets: results,
+      recievedAssets: results.map(r => ({
+        ...r,
+        asset: r.asset ? mapAssetForResponse(r.asset) : null,
+      })),
       totalPages,
       currentPage: pageNumber,
       count: total,
@@ -412,20 +381,39 @@ const getRecievedAssets = async (req, res) => {
 
 const getSingleTransferRecord = async (req, res) => {
   try {
-    const transferRecord = await TransferAsset.findById(req.params.id)
-      .populate('assetId')
-      .populate({
-        path: 'to',
-        select: ['-refreshToken', '-provider', '-password'],
-      })
-      .populate({
-        path: 'from',
-        select: ['-refreshToken', '-provider', '-password'],
-      });
+    const transferRecord = await prisma.transferRecord.findUnique({
+      where: { id: req.params.id },
+      include: {
+        asset: true,
+        to: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phoneNumber: true,
+            ghanaCardNumber: true,
+            image: true,
+          },
+        },
+        from: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phoneNumber: true,
+            ghanaCardNumber: true,
+            image: true,
+          },
+        },
+      },
+    });
     if (!transferRecord) {
       return res.status(404).json('Transfer record not found');
     }
-    res.status(200).json(transferRecord);
+    res.status(200).json({
+      ...transferRecord,
+      asset: transferRecord.asset ? mapAssetForResponse(transferRecord.asset) : null,
+    });
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -433,15 +421,13 @@ const getSingleTransferRecord = async (req, res) => {
 
 const changeAssetStatus = async (req, res) => {
   try {
-    const updatedAsset = await Asset.findOneAndUpdate(
-      { _id: req.params.id, owner: req.userId },
-      {
-        status: req.body.status,
-      },
-      { new: true }
-    );
-    if (updatedAsset) {
-      res.status(200).json({ updatedAsset });
+    const updatedAsset = await prisma.asset.updateMany({
+      where: { id: req.params.id, ownerId: req.userId },
+      data: { status: toDbStatus(req.body.status) },
+    });
+    if (updatedAsset.count) {
+      const asset = await prisma.asset.findUnique({ where: { id: req.params.id } });
+      res.status(200).json({ updatedAsset: mapAssetForResponse(asset) });
     } else {
       res
         .status(400)
@@ -458,60 +444,33 @@ const getAllUserAssets = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
   let pageNumber = req.query?.pageNumber * 1 || 1;
   let search = req.query?.search || '';
-  const userId = new mongoose.Types.ObjectId(req.userId);
 
   try {
-    // Pipeline for counting total documents
-    const countPipeline = [
-      {
-        $match: {
-          owner: userId,
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(search, 'i') } },
-            { name: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $count: 'total' },
-    ];
-
-    const countResult = await Asset.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No assets found');
-    }
-
-    const total = countResult[0].total;
+    const where = {
+      ownerId: req.userId,
+      OR: [
+        { uniqueNumber: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+    const total = await prisma.asset.count({ where });
+    if (!total) return res.status(404).json('No assets found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
-    // Pipeline for retrieving paginated results
-    const retrievalPipeline = [
-      {
-        $match: {
-          owner: userId,
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(search, 'i') } },
-            { name: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await Asset.aggregate(retrievalPipeline);
-
-    if (!results[0]) {
-      return res.status(404).json('No assets found hi');
-    }
+    const results = await prisma.asset.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
 
     const totalPages = Math.ceil(total / pageSize);
     res.json({
-      assets: results,
+      assets: results.map(mapAssetForResponse),
       totalPages,
       currentPage: pageNumber,
       count: total,
@@ -523,9 +482,8 @@ const getAllUserAssets = async (req, res) => {
 
 const deleteAsset = async (req, res) => {
   try {
-    const assetToDelete = await Asset.findOne({
-      _id: req.params.id,
-      owner: req.userId,
+    const assetToDelete = await prisma.asset.findFirst({
+      where: { id: req.params.id, ownerId: req.userId },
     });
 
     if (!assetToDelete)
@@ -534,24 +492,19 @@ const deleteAsset = async (req, res) => {
         .json(
           'Failed to delete Asset, confirm if the user is the owner of the asset '
         );
-    const transformedAssetObject = assetToDelete.toObject();
-
-    const movedToDeleteCollection = await DeletedAsset.create({
-      ...transformedAssetObject,
-      deleted: new Date(),
+    const deletedAsset = await prisma.asset.delete({
+      where: { id: req.params.id },
     });
-
-    if (movedToDeleteCollection) {
-      const deletedAsset = await Asset.findOneAndDelete({
-        _id: req.params.id,
-        owner: req.userId,
+    if (deletedAsset) {
+      return res.status(200).json({
+        deletedAsset: mapAssetForResponse(deletedAsset),
+        movedToDeleteCollection: {
+          ...mapAssetForResponse(assetToDelete),
+          deleted: new Date(),
+        },
       });
-      if (deletedAsset) {
-        return res.status(200).json({ deletedAsset, movedToDeleteCollection });
-      }
-    } else {
-      return res.status(409).json('Failed to delete asset, please try again');
     }
+    return res.status(409).json('Failed to delete asset, please try again');
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -559,12 +512,15 @@ const deleteAsset = async (req, res) => {
 
 const getSingleAssetUser = async (req, res) => {
   try {
-    const asset = await Asset.findOne({
-      uniqueNumber: req.params.id,
-      owner: req.userId,
-    }).populate('owner');
+    const asset = await prisma.asset.findFirst({
+      where: {
+        uniqueNumber: req.params.id,
+        ownerId: req.userId,
+      },
+      include: { owner: true },
+    });
     if (!asset) res.status(404).json('Asset not found');
-    res.status(200).json({ asset });
+    res.status(200).json({ asset: mapAssetForResponse(asset) });
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -572,9 +528,12 @@ const getSingleAssetUser = async (req, res) => {
 
 const getSingleAsset = async (req, res) => {
   try {
-    const asset = await Asset.findById(req.params.id).populate('owner');
+    const asset = await prisma.asset.findUnique({
+      where: { id: req.params.id },
+      include: { owner: true },
+    });
     if (!asset) return res.status(404).json('Asset not found');
-    res.status(200).json({ asset });
+    res.status(200).json({ asset: mapAssetForResponse(asset) });
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -582,8 +541,11 @@ const getSingleAsset = async (req, res) => {
 
 const getAllAssets = async (req, res) => {
   try {
-    const assets = await Asset.find().populate('owner').exec();
-    res.status(200).json({ assets });
+    const assets = await prisma.asset.findMany({
+      include: { owner: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.status(200).json({ assets: assets.map(mapAssetForResponse) });
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -653,9 +615,23 @@ const generateDummyData = async (req, res) => {
   try {
     for (let i = 0; i < req.body.length; i++) {
       const randomAsset = getRandomAsset();
-      await Asset.create({
-        ...randomAsset,
-        owner: req.userId,
+      await prisma.asset.create({
+        data: {
+          model: randomAsset.model,
+          brand: randomAsset.brand,
+          name: `${randomAsset.brand} ${randomAsset.model}`,
+          type: randomAsset.type,
+          uniqueNumber: randomAsset.uniqueNumber,
+          dateOfPurchase: randomAsset.dateOfPurchase,
+          price: randomAsset.price,
+          purchaseReceipt: randomAsset.purchaseReciept,
+          identificationDetails: randomAsset.identificationDetails,
+          otherDetails: randomAsset.otherDetails,
+          images: randomAsset.images,
+          registrationAddress: randomAsset.registrationAddress,
+          status: toDbStatus(randomAsset.status),
+          ownerId: req.userId,
+        },
       });
       if (i === req.body.length - 1) {
         return res.status(201).json('Data generated successfully');
@@ -669,31 +645,26 @@ const generateDummyData = async (req, res) => {
 const getAssets = async (req, res) => {
   const search = req.query.search || '';
   const owner = req.query.owner;
-  const pageSize = req.query.pageSize;
-  const pageNumber = req.query.pageNumber || 1;
+  const pageSize = Number(req.query.pageSize || 0);
+  const pageNumber = Number(req.query.pageNumber || 1);
   const skip = (pageNumber - 1) * pageSize;
   try {
-    const filter = {
-      $or: [
-        { model: { $regex: search, $options: 'i' } },
-        { brand: { $regex: search, $options: 'i' } },
-        { name: { $regex: search, $options: 'i' } },
-        { uniqueNumber: { $regex: search, $options: 'i' } },
-      ].filter(Boolean),
+    const where = {
+      ...(owner ? { ownerId: owner } : {}),
+      OR: [
+        { model: { contains: search, mode: 'insensitive' } },
+        { brand: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+        { uniqueNumber: { contains: search, mode: 'insensitive' } },
+      ],
     };
-    if (owner) {
-      filter.owner = owner;
-    }
-
-    const total = await Asset.countDocuments(filter);
-    const assetQuery = Asset.find(filter).sort({ createdAt: -1 });
-    let assets;
-    if (pageSize) {
-      assets = await assetQuery.limit(pageSize).skip(skip);
-    } else {
-      assets = await assetQuery;
-    }
-    res.status(200).json({ assets, pageNumber, total });
+    const total = await prisma.asset.count({ where });
+    const assets = await prisma.asset.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      ...(pageSize ? { take: pageSize, skip } : {}),
+    });
+    res.status(200).json({ assets: assets.map(mapAssetForResponse), pageNumber, total });
   } catch (error) {
     res.status(500).json(error);
   }

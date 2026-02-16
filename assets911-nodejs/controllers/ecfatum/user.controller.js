@@ -1,5 +1,5 @@
-const User = require('../../models/general_users/user.model');
 const fs = require('fs');
+const prisma = require('../../config/prisma');
 
 const checkExistingUsers = async (req, res) => {
   try {
@@ -14,8 +14,7 @@ const checkExistingUsers = async (req, res) => {
 
     for (const user of uniquePhoneNumbersArray) {
       const phoneNumber = user.phoneNumber;
-      const foundUser = await User.findOne({ phoneNumber });
-
+      const foundUser = await prisma.user.findFirst({ where: { phoneNumber } });
       if (foundUser) {
         resultsArray.push({
           phoneNumber,
@@ -33,7 +32,6 @@ const checkExistingUsers = async (req, res) => {
     fs.writeFileSync('./results.json', JSON.stringify(resultsArray));
     res.status(200).json('Results saved');
   } catch (error) {
-    console.log(error);
     res.status(500).json('Internal server error');
   }
 };

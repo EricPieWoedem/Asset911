@@ -1,8 +1,5 @@
-//This controller is responsible for managing institutions by Ecfatum
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const Institution = require('../../models/institutions/institution.model');
-const InstitutionAdmin = require('../../models/institutions/admin.model');
+const prisma = require('../../config/prisma');
 const {
   instutionPermissions,
   ecfatumPermissions,
@@ -27,12 +24,14 @@ const createDefaultInstitutionAdmin = async (
   } else {
     permissions = Object.values(instutionPermissions);
   }
-  const admin = await InstitutionAdmin.create({
-    institutionId,
-    name: 'Super Admin',
-    email,
-    password: hashedPassword,
-    permissions,
+  const admin = await prisma.institutionAdmin.create({
+    data: {
+      institutionId,
+      name: 'Super Admin',
+      email,
+      password: hashedPassword,
+      permissions,
+    },
   });
   return admin;
 };
@@ -41,13 +40,17 @@ const createInstitution = async (req, res) => {
   const { name, phoneNumber, address, email } = req.body;
   const password = req.body.password || '';
   try {
-    const existingInstitution = await Institution.findOne({ email });
+    const existingInstitution = await prisma.institution.findFirst({
+      where: { email },
+    });
     if (existingInstitution) return res.status(400).json(existingInstitution);
-    const institution = await Institution.create({
-      name,
-      phoneNumber,
-      address,
-      email,
+    const institution = await prisma.institution.create({
+      data: {
+        name,
+        phoneNumber,
+        address,
+        email,
+      },
     });
     const defaultAdmin = await createDefaultInstitutionAdmin(
       institution.id,
@@ -76,38 +79,30 @@ const getAllInstitutions = async (req, res) => {
   let searchField = req.query?.searchField || 'name';
   let search = req.query?.search || '';
   try {
-    const countPipeline = [
-      {
-        $match: {
-          [searchField]: { $regex: new RegExp(search, 'i') },
-        },
+    const allowedSearchFields = ['name', 'email', 'phoneNumber', 'address'];
+    if (!allowedSearchFields.includes(searchField)) searchField = 'name';
+    const where = {
+      [searchField]: {
+        contains: search,
+        mode: 'insensitive',
       },
-      {
-        $count: 'total',
-      },
-    ];
-    const countResult = await Institution.aggregate(countPipeline);
-    if (!countResult[0]) {
+    };
+
+    const total = await prisma.institution.count({ where });
+    if (!total) {
       return res.status(404).json('No institutions found');
     }
-    const total = countResult[0].total;
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
-
-    const retrievalPipeline = [
-      {
-        $match: {
-          [searchField]: { $regex: new RegExp(search, 'i') },
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-    const results = await Institution.aggregate(retrievalPipeline);
-    if (!results[0]) return res.status(404).json('No institutions found');
+    const results = await prisma.institution.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No institutions found');
 
     const totalPages = Math.ceil(total / pageSize);
     res.status(200).json({
@@ -124,42 +119,43 @@ const getAllInstitutions = async (req, res) => {
 const getInstitutionAdmins = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
   let pageNumber = req.query?.pageNumber * 1 || 1;
-  let searchField = req.query?.searchField || 'fullName';
+  let searchField = req.query?.searchField || 'name';
   let search = req.query?.search || '';
-  const institutionId = new mongoose.Types.ObjectId(req.params.id);
+  const institutionId = req.params.id;
   try {
-    const countPipeline = [
-      {
-        $match: {
-          institutionId,
-          [searchField]: { $regex: new RegExp(search, 'i') },
-        },
+    const allowedSearchFields = ['name', 'email'];
+    if (!allowedSearchFields.includes(searchField)) searchField = 'name';
+    const where = {
+      institutionId,
+      [searchField]: {
+        contains: search,
+        mode: 'insensitive',
       },
-      { $count: 'total' },
-    ];
-    const countResult = await InstitutionAdmin.aggregate(countPipeline);
-    if (!countResult[0]) return res.status(404).json('No admins found');
-    const total = countResult[0].total;
+    };
+
+    const total = await prisma.institutionAdmin.count({ where });
+    if (!total) return res.status(404).json('No admins found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
-
-    const retrievalPipeline = [
-      {
-        $match: {
-          institutionId,
-          [searchField]: { $regex: new RegExp(search, 'i') },
-        },
+    const results = await prisma.institutionAdmin.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        permissions: true,
+        institutionId: true,
+        createdAt: true,
+        updatedAt: true,
       },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await InstitutionAdmin.aggregate(retrievalPipeline);
-    if (!results[0]) {
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) {
       return res.status(404).json('No admins found');
     }
 
@@ -177,7 +173,9 @@ const getInstitutionAdmins = async (req, res) => {
 
 const getInstitution = async (req, res) => {
   try {
-    const institution = await Institution.findById(req.params.id);
+    const institution = await prisma.institution.findUnique({
+      where: { id: req.params.id },
+    });
     if (!institution) return res.status(404).json('Failed to get institution');
     res.status(200).json(institution);
   } catch (error) {
@@ -187,7 +185,9 @@ const getInstitution = async (req, res) => {
 
 const getInstitutionByName = async (req, res) => {
   try {
-    const institution = await Institution.findOne({ name: req.params.name });
+    const institution = await prisma.institution.findFirst({
+      where: { name: req.params.name },
+    });
     if (!institution) return res.status(404).json('Failed to get institution');
     res.status(200).json(institution);
   } catch (error) {
@@ -210,12 +210,10 @@ const createAdminForInstitution = async (req, res) => {
 
 const updateInstituion = async (req, res) => {
   try {
-    const updatedInstitution = await Institution.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...req.body,
-      }
-    );
+    const updatedInstitution = await prisma.institution.update({
+      where: { id: req.params.id },
+      data: { ...req.body },
+    });
     if (updatedInstitution) return res.status(200).json('Success');
   } catch (error) {
     console.log(error);

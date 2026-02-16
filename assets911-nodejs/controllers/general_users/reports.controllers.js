@@ -1,10 +1,12 @@
-const Reports = require('../../models/general_users/report.model');
+const prisma = require('../../config/prisma');
 
 const createReport = async (req, res) => {
   try {
-    const report = await Reports.create(req.body);
+    const report = await prisma.report.create({
+      data: req.body,
+    });
     if (!report) return res.status(400).json('Report not created');
-    res.status();
+    res.status(201).json(report);
   } catch (error) {
     res.status(500).json('Internal server error');
   }
@@ -12,10 +14,14 @@ const createReport = async (req, res) => {
 
 const updateReport = async (req, res) => {
   try {
-    const report = await Reports.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
+    const existingReport = await prisma.report.findUnique({
+      where: { id: req.params.id },
     });
-    if (!report) return res.status(400).json('Report not updated');
+    if (!existingReport) return res.status(400).json('Report not updated');
+    const report = await prisma.report.update({
+      where: { id: req.params.id },
+      data: req.body,
+    });
     res.status(200).json(report);
   } catch (error) {
     res.status(500).json('Internal server error');

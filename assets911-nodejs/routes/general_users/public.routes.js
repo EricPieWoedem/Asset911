@@ -6,7 +6,7 @@ const {
 
 const publicRouter = express.Router();
 
-publicRouter.get('/:uniqueNumber', getAssetByUniqueNumber);
 publicRouter.get('/store/for-sale', getAssetsOnSale);
+publicRouter.get('/:uniqueNumber', getAssetByUniqueNumber);
 
 module.exports = publicRouter;

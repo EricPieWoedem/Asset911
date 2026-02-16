@@ -1,24 +1,29 @@
-const Admin = require('../../models/institutions/admin.model');
+const prisma = require('../../config/prisma');
 const bcrypt = require('bcryptjs');
 const { createTokenWithPermissions } = require('../../config/jwt');
+const { sendRefreshToken } = require('../../helpers/authHelpers');
 
 const salt = bcrypt.genSaltSync(12);
 
 const createAdmin = async (req, res) => {
   const { name, email, permissions, password } = req.body;
   try {
-    const exisitingAdmin = await Admin.findOne({
-      email,
-      institutionId: req.institutionId,
+    const exisitingAdmin = await prisma.institutionAdmin.findFirst({
+      where: {
+        email,
+        institutionId: req.institutionId,
+      },
     });
     if (exisitingAdmin) return res.status(400).json(exisitingAdmin);
     const hashedPassword = bcrypt.hashSync(password, salt);
-    const newAdmin = await Admin.create({
-      name,
-      permissions,
-      email,
-      password: hashedPassword,
-      institutionId: req.institutionId,
+    const newAdmin = await prisma.institutionAdmin.create({
+      data: {
+        name,
+        permissions,
+        email,
+        password: hashedPassword,
+        institutionId: req.institutionId,
+      },
     });
     if (!newAdmin) return res.status(400).json('Failed to create Admin');
     res.status(201).json('Admin created');
@@ -28,36 +33,37 @@ const createAdmin = async (req, res) => {
 };
 
 const login = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, otp } = req.body;
   try {
-    const admin = await Admin.findOne({
-      email,
-    })
-      .populate('institutionId')
-      .exec();
+    const admin = await prisma.institutionAdmin.findUnique({
+      where: { email },
+      include: { institution: true },
+    });
     if (!admin) return res.status(400).json('Invalid Credentials');
 
-    const isPasswordValid = bcrypt.compareSync(password, admin.password);
+    const isOtpValid = otp && admin.seedOtp && otp === admin.seedOtp;
+    const isPasswordValid = password
+      ? bcrypt.compareSync(password, admin.password)
+      : false;
 
-    if (isPasswordValid) {
+    if (isPasswordValid || isOtpValid) {
       const adminProfile = {
-        name: admin.fullName,
+        name: admin.name,
         email: admin.email,
       };
 
-      const { accessToken, refreshToken } = createTokenWithPermissions(admin);
+      const tokenPayload = {
+        ...admin,
+        institutionId: admin.institution || admin.institutionId,
+      };
+      const { accessToken, refreshToken } = createTokenWithPermissions(tokenPayload);
 
-      res.cookie('jrft', refreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000,
+      sendRefreshToken(res, refreshToken);
+      await prisma.institutionAdmin.update({
+        where: { id: admin.id },
+        data: { refreshToken },
       });
-      admin.refreshToken = refreshToken;
-      const refreshTokenSaved = await admin.save();
 
-      if (!refreshTokenSaved)
-        return res.status(400).json('Failed to save refresh token');
       res.status(200).json({ accessToken, adminProfile });
     } else {
       res.status(400).json('Invalid Credentials');

@@ -4,17 +4,12 @@ const {
   createTokenWithPermissions,
   createToken,
 } = require('./jwt');
-const PublicUser = require('../models/general_users/user.model');
-const InstitutionAdmin = require('../models/institutions/admin.model');
-const EcfatumAdmin = require('../models/ecfatum/admin.model');
-const Officer = require('../models/police/officer.model');
+const prisma = require('./prisma');
 
 const serverSessionRouter = require('express').Router();
 
 serverSessionRouter.get('/get-auth', (req, res) => {
-  // DEV MODE BYPASS: Set BYPASS_AUTH=true in .env to bypass authentication
   if (process.env.BYPASS_AUTH === 'true') {
-    // Return mock user data based on path or default to regular user
     const mockUser = {
       name: 'Dev User',
       email: 'dev@user.com',
@@ -57,29 +52,49 @@ serverSessionRouter.get('/refresh', async (req, res) => {
     const cookies = req.cookies;
     if (!cookies.jrft) return res.status(401).json('Unauthorized');
     const refreshToken = cookies.jrft;
-    let user;
-
-    user = await PublicUser.findOne({ refreshToken });
-    if (!user)
-      user = await InstitutionAdmin.findOne({ refreshToken }).populate(
-        'institutionId'
-      );
-    if (!user) user = await EcfatumAdmin.findOne({ refreshToken });
-    if (!user) user = await Officer.findOne({ refreshToken });
-
-    if (!user) return res.status(403).json('Forbidden');
-
-    const verifiedRefreshToken = verifyRefreshToken(refreshToken, user);
-    if (!verifiedRefreshToken) return res.status(401).json('Unauthorized');
-
     let accessToken;
-    if (user.provider === 'google' || user.provider === 'phoneNumber') {
-      accessToken = createToken(user).accessToken;
-    } else {
-      accessToken = createTokenWithPermissions(user).accessToken;
+
+    const publicUser = await prisma.user.findFirst({ where: { refreshToken } });
+    if (publicUser) {
+      const verifiedRefreshToken = verifyRefreshToken(refreshToken, publicUser);
+      if (!verifiedRefreshToken) return res.status(401).json('Unauthorized');
+      accessToken = createToken(publicUser).accessToken;
+      return res.status(200).json({ accessToken });
     }
 
-    res.status(200).json({ accessToken });
+    const institutionAdmin = await prisma.institutionAdmin.findFirst({
+      where: { refreshToken },
+      include: { institution: true },
+    });
+    if (institutionAdmin) {
+      const verifiedRefreshToken = verifyRefreshToken(refreshToken, institutionAdmin);
+      if (!verifiedRefreshToken) return res.status(401).json('Unauthorized');
+      accessToken = createTokenWithPermissions({
+        ...institutionAdmin,
+        institutionId: institutionAdmin.institution || institutionAdmin.institutionId,
+      }).accessToken;
+      return res.status(200).json({ accessToken });
+    }
+
+    const ecfatumAdmin = await prisma.ecfatumAdmin.findFirst({
+      where: { refreshToken },
+    });
+    if (ecfatumAdmin) {
+      const verifiedRefreshToken = verifyRefreshToken(refreshToken, ecfatumAdmin);
+      if (!verifiedRefreshToken) return res.status(401).json('Unauthorized');
+      accessToken = createTokenWithPermissions(ecfatumAdmin).accessToken;
+      return res.status(200).json({ accessToken });
+    }
+
+    const officer = await prisma.officer.findFirst({ where: { refreshToken } });
+    if (officer) {
+      const verifiedRefreshToken = verifyRefreshToken(refreshToken, officer);
+      if (!verifiedRefreshToken) return res.status(401).json('Unauthorized');
+      accessToken = createTokenWithPermissions(officer).accessToken;
+      return res.status(200).json({ accessToken });
+    }
+
+    return res.status(403).json('Forbidden');
   } catch (error) {
     res.status(500).json('Internal server error');
   }
@@ -91,17 +106,54 @@ serverSessionRouter.get('/logout', async (req, res) => {
     if (!cookies.jrft) return res.status(401).json('Unauthorized');
     const refreshToken = cookies.jrft;
 
-    let user;
-    user = await PublicUser.findOne({ refreshToken });
-    if (!user) user = await InstitutionAdmin.findOne({ refreshToken });
-    if (!user) user = await EcfatumAdmin.findOne({ refreshToken });
-    if (!user) user = await Officer.findOne({ refreshToken });
+    const publicUser = await prisma.user.findFirst({ where: { refreshToken } });
+    if (publicUser) {
+      await prisma.user.update({
+        where: { id: publicUser.id },
+        data: { refreshToken: '' },
+      });
+      res.clearCookie('jrft');
+      return res.status(200).json('logged out');
+    }
 
-    if (!user) return res.status(403).json('Forbidden');
+    const institutionAdmin = await prisma.institutionAdmin.findFirst({
+      where: { refreshToken },
+    });
+    if (institutionAdmin) {
+      await prisma.institutionAdmin.update({
+        where: { id: institutionAdmin.id },
+        data: { refreshToken: '' },
+      });
+      res.clearCookie('jrft');
+      return res.status(200).json('logged out');
+    }
 
-    user.refreshToken = '';
-    const result = await user.save();
-    if (!result) return res.status(400).json('Logout Failed');
+    const ecfatumAdmin = await prisma.ecfatumAdmin.findFirst({
+      where: { refreshToken },
+    });
+    if (ecfatumAdmin) {
+      await prisma.ecfatumAdmin.update({
+        where: { id: ecfatumAdmin.id },
+        data: { refreshToken: '' },
+      });
+      res.clearCookie('jrft');
+      return res.status(200).json('logged out');
+    }
+
+    const officer = await prisma.officer.findFirst({ where: { refreshToken } });
+    if (officer) {
+      await prisma.officer.update({
+        where: { id: officer.id },
+        data: { refreshToken: '' },
+      });
+      res.clearCookie('jrft');
+      return res.status(200).json('logged out');
+    }
+
+    if (!publicUser && !institutionAdmin && !ecfatumAdmin && !officer) {
+      return res.status(403).json('Forbidden');
+    }
+
     res.clearCookie('jrft');
     res.status(200).json('logged out');
   } catch (error) {

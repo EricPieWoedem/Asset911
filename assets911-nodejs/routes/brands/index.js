@@ -1,5 +1,5 @@
 const express = require('express');
-const Brand = require('../../models/brands/brands.model');
+const prisma = require('../../config/prisma');
 const {
   createCategory,
   createBrandAndModel,
@@ -11,7 +11,9 @@ const brands = express.Router();
 
 brands.get('/', async (req, res) => {
   try {
-    const brands = await Brand.find({});
+    const brands = await prisma.brand.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
     res.status(200).json(brands);
   } catch (error) {
     res.status(500).send('Internal Server error');
@@ -21,18 +23,22 @@ brands.get('/', async (req, res) => {
 brands.put('/:id', async (req, res) => {
   const { brands, model } = req.body;
   try {
-    const brand = await Brand.findOne({ type: req.params.id });
-    if (Object.keys(brand.properties).includes(brands)) {
-      brand.properties[brands].push(model);
+    const brand = await prisma.brand.findFirst({
+      where: { type: req.params.id },
+    });
+    if (!brand) return res.status(404).send('Not found');
+
+    const properties = brand.properties || {};
+    if (Object.prototype.hasOwnProperty.call(properties, brands)) {
+      properties[brands].push(model);
     } else {
-      brand.properties[brands] = [model];
+      properties[brands] = [model];
     }
 
-    const testResult = await Brand.findOneAndUpdate(
-      { type: req.params.id },
-      { properties: brand.properties },
-      { new: true }
-    );
+    const testResult = await prisma.brand.update({
+      where: { id: brand.id },
+      data: { properties },
+    });
     if (testResult) {
       res.status(200).json(testResult);
     } else res.status(404).send('Not found');

@@ -1,24 +1,25 @@
-//Auth controller for Ecfatum users
-
-const EcfatumAdmin = require('../../models/ecfatum/admin.model');
+const prisma = require('../../config/prisma');
 const bcrypt = require('bcryptjs');
 const { ecfatumPermissions } = require('../../config/rolesAndPermissions');
 const { createTokenWithPermissions } = require('../../config/jwt');
+const { sendRefreshToken } = require('../../helpers/authHelpers');
 
 const salt = bcrypt.genSaltSync(10);
 
 const createSuperAdmin = async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    const superAdmin = await EcfatumAdmin.findOne({ email });
+    const superAdmin = await prisma.ecfatumAdmin.findUnique({ where: { email } });
     if (!superAdmin) {
       const hashedPassword = bcrypt.hashSync(password, salt);
-      const newSuperAdmin = await EcfatumAdmin.create({
-        name,
-        email,
-        password: hashedPassword,
-        institutionId: 'ecfatum',
-        permissions: Object.values(ecfatumPermissions),
+      const newSuperAdmin = await prisma.ecfatumAdmin.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          institutionId: 'ecfatum',
+          permissions: Object.values(ecfatumPermissions),
+        },
       });
       if (newSuperAdmin) return res.status(201).json('Admin created');
       res.status(400).json('Admin not created');
@@ -32,18 +33,20 @@ const createSuperAdmin = async (req, res) => {
 
 const loginSuperAdmin = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const superAdmin = await EcfatumAdmin.findOne({ email });
+    const { email, password, otp } = req.body;
+    const superAdmin = await prisma.ecfatumAdmin.findUnique({ where: { email } });
     if (superAdmin) {
-      const isPasswordValid = bcrypt.compareSync(password, superAdmin.password);
-      if (isPasswordValid) {
+      const isOtpValid = otp && superAdmin.seedOtp && otp === superAdmin.seedOtp;
+      const isPasswordValid = password
+        ? bcrypt.compareSync(password, superAdmin.password)
+        : false;
+      if (isPasswordValid || isOtpValid) {
         const { accessToken, refreshToken } =
           createTokenWithPermissions(superAdmin);
-        res.cookie('jrft', refreshToken, {
-          httpOnly: true,
-          secure: true,
-          sameSite: 'none',
-          maxAge: 24 * 60 * 60 * 1000,
+        sendRefreshToken(res, refreshToken);
+        await prisma.ecfatumAdmin.update({
+          where: { id: superAdmin.id },
+          data: { refreshToken },
         });
         return res.status(200).json({ accessToken });
       }

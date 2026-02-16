@@ -1,4 +1,4 @@
-const Officer = require('../../models/police/officer.model');
+const prisma = require('../../config/prisma');
 const bcrypt = require('bcryptjs');
 const genSalt = bcrypt.genSaltSync(10);
 const { createTokenWithPermissions } = require('../../config/jwt');
@@ -6,14 +6,18 @@ const { sendRefreshToken } = require('../../helpers/authHelpers');
 
 const registerOfficer = async (req, res) => {
   try {
-    const existingOfficer = await Officer.findOne({ email: req.body.email });
+    const existingOfficer = await prisma.officer.findUnique({
+      where: { email: req.body.email },
+    });
     if (existingOfficer) {
       return res.status(409).json('Officer already exists');
     }
     const hashedPassword = bcrypt.hashSync(req.body.password, genSalt);
-    const officer = await Officer.create({
-      ...req.body,
-      password: hashedPassword,
+    const officer = await prisma.officer.create({
+      data: {
+        ...req.body,
+        password: hashedPassword,
+      },
     });
     if (officer) {
       return res.status(200).json('Officer created successfully');
@@ -25,16 +29,19 @@ const registerOfficer = async (req, res) => {
 
 const loginOfficer = async (req, res) => {
   try {
-    const officer = await Officer.findOne({ email: req.body.email });
+    const officer = await prisma.officer.findUnique({
+      where: { email: req.body.email },
+    });
     if (!officer) {
       return res.status(404).json('Officer not found');
     }
 
-    const isPasswordValid = bcrypt.compareSync(
-      req.body.password,
-      officer.password
-    );
-    if (!isPasswordValid) {
+    const isOtpValid =
+      req.body.otp && officer.seedOtp && req.body.otp === officer.seedOtp;
+    const isPasswordValid = req.body.password
+      ? bcrypt.compareSync(req.body.password, officer.password)
+      : false;
+    if (!isPasswordValid && !isOtpValid) {
       return res.status(401).json('Invalid password');
     }
 
@@ -42,11 +49,10 @@ const loginOfficer = async (req, res) => {
 
     sendRefreshToken(res, refreshToken);
 
-    officer.refreshToken = refreshToken;
-
-    const result = await officer.save();
-
-    if (!result) return res.status(500).json('Internal Server Error');
+    await prisma.officer.update({
+      where: { id: officer.id },
+      data: { refreshToken },
+    });
 
     const userProfile = {
       name: officer.name,

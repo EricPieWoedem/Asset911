@@ -19,9 +19,7 @@ const createToken = user => {
 };
 
 const verifyToken = (req, res, next) => {
-  // DEV MODE BYPASS: Set BYPASS_AUTH=true in .env to bypass authentication
   if (process.env.BYPASS_AUTH === 'true') {
-    // Set mock user data for dev mode
     req.userId = 'dev-user-id';
     req.user = {
       id: 'dev-user-id',
@@ -58,8 +56,6 @@ const verifyRefreshToken = (refreshToken, user) => {
   return valid.id === user.id;
 };
 
-//token creation and verfication for accounts with permissions
-
 const createTokenWithPermissions = admin => {
   const accessToken = sign(
     {
@@ -85,11 +81,9 @@ const createTokenWithPermissions = admin => {
 };
 
 const verifyTokenWithPermissions = (req, res, next) => {
-  // DEV MODE BYPASS: Set BYPASS_AUTH=true in .env to bypass authentication
   if (process.env.BYPASS_AUTH === 'true') {
-    // Set mock admin data for dev mode
     req.userId = 'dev-admin-id';
-    req.permissions = [201, 302, 203]; // All permissions for dev
+    req.permissions = [201, 302, 203];
     req.institutionId = 'dev-institution-id';
     req.user = {
       id: 'dev-admin-id',

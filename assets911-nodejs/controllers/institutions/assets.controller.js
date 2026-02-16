@@ -1,20 +1,51 @@
-const InstitutionAsset = require('../../models/institutions/asset.model');
-const AssetAssignmentHistory = require('../../models/institutions/assetAssignment.model');
-const mongoose = require('mongoose');
+const prisma = require('../../config/prisma');
+
+const toDbStatus = status => {
+  if (status === 'for sale') return 'for_sale';
+  return status;
+};
+
+const fromDbStatus = status => {
+  if (status === 'for_sale') return 'for sale';
+  return status;
+};
+
+const mapInstitutionAssetForResponse = asset => ({
+  ...asset,
+  status: fromDbStatus(asset.status),
+  purchaseReciept: asset.purchaseReceipt,
+});
 
 const createAsset = async (req, res) => {
   try {
-    const existingAsset = await InstitutionAsset.findOne({
-      uniqueNumber: req.body.uniqueNumber,
+    const existingAsset = await prisma.institutionAsset.findFirst({
+      where: { uniqueNumber: req.body.uniqueNumber },
     });
     if (existingAsset) return res.status(400).json('Asset already exists');
-    const asset = await InstitutionAsset.create({
-      ...req.body,
-      name: `${req.body.brand} ${req.body.model}`,
-      owner: req.institutionId,
+    const asset = await prisma.institutionAsset.create({
+      data: {
+        model: req.body.model || null,
+        brand: req.body.brand || null,
+        type: req.body.type,
+        categoryType: req.body.categoryType || null,
+        name: `${req.body.brand} ${req.body.model}`,
+        uniqueNumber: req.body.uniqueNumber || null,
+        dateOfPurchase: req.body.dateOfPurchase || null,
+        price: Number(req.body.price),
+        purchaseReceipt: req.body.purchaseReceipt || req.body.purchaseReciept || '',
+        identificationDetails: req.body.identificationDetails,
+        otherDetails: req.body.otherDetails || null,
+        images: req.body.images || [],
+        ownerId: req.institutionId,
+        registrationAddress: req.body.registrationAddress,
+        assetLocation: req.body.assetLocation,
+        status: toDbStatus(req.body.status || 'okay'),
+        properties: req.body.properties || undefined,
+        additionalCategoryData: req.body.additionalCategoryData || undefined,
+      },
     });
     if (!asset) return res.status(400).json('Failed to create asset');
-    res.status(200).json(asset);
+    res.status(200).json(mapInstitutionAssetForResponse(asset));
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -24,60 +55,35 @@ const getAllInstitutionAssets = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
   let pageNumber = req.query?.pageNumber * 1 || 1;
   let search = req.query?.search || '';
-  const institutionId = new mongoose.Types.ObjectId(req.institutionId);
 
   try {
-    const countPipeline = [
-      {
-        $match: {
-          owner: institutionId,
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(search, 'i') } },
-            { name: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $count: 'total' },
-    ];
-
-    const countResult = await InstitutionAsset.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No assets found');
-    }
-
-    const total = countResult[0].total;
+    const where = {
+      ownerId: req.institutionId,
+      OR: [
+        { uniqueNumber: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+    const total = await prisma.institutionAsset.count({ where });
+    if (!total) return res.status(404).json('No assets found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
 
-    const retrievalPipeline = [
-      {
-        $match: {
-          owner: institutionId,
-          $or: [
-            { uniqueNumber: { $regex: new RegExp(search, 'i') } },
-            { name: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-
-    const results = await InstitutionAsset.aggregate(retrievalPipeline);
-
-    if (!results) {
-      return res.status(404).json('No assets found');
-    }
+    const results = await prisma.institutionAsset.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No assets found');
 
     const totalPages = Math.ceil(total / pageSize);
 
     res.status(200).json({
-      assets: results,
+      assets: results.map(mapInstitutionAssetForResponse),
       totalPages,
       currentPage: pageNumber,
       total,
@@ -89,15 +95,22 @@ const getAllInstitutionAssets = async (req, res) => {
 
 const editAsset = async (req, res) => {
   try {
-    const updatedAsset = await InstitutionAsset.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        owner: req.institutionId,
-      },
-      { ...req.body },
-      { new: true }
-    );
-    if (!updatedAsset) return res.status(400).json('Failed to update asset');
+    const existing = await prisma.institutionAsset.findFirst({
+      where: { id: req.params.id, ownerId: req.institutionId },
+    });
+    if (!existing) return res.status(400).json('Failed to update asset');
+    const data = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(data, 'status')) {
+      data.status = toDbStatus(data.status);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'purchaseReciept')) {
+      data.purchaseReceipt = data.purchaseReciept;
+      delete data.purchaseReciept;
+    }
+    await prisma.institutionAsset.update({
+      where: { id: req.params.id },
+      data,
+    });
     res.status(201).json('Updated Asset Successfully');
   } catch (error) {
     res.status(500).json('Internal Server Error');
@@ -107,36 +120,45 @@ const editAsset = async (req, res) => {
 const assignAsset = async (req, res) => {
   const { staffId, staffName } = req.body;
   try {
-    const assetToAssign = await InstitutionAsset.findOne({
-      _id: req.params.id,
-      owner: req.institutionId,
+    const assetToAssign = await prisma.institutionAsset.findFirst({
+      where: {
+        id: req.params.id,
+        ownerId: req.institutionId,
+      },
     });
     if (!assetToAssign) return res.status(404).json('No asset found');
 
-    const checkifAssetIsAlreadyAssigned = assetToAssign.assignedTo;
+    const checkifAssetIsAlreadyAssigned = assetToAssign.assignedTo || {};
 
-    if (Object.keys(checkifAssetIsAlreadyAssigned).length > 1)
+    if (Object.keys(checkifAssetIsAlreadyAssigned).length > 1) {
       return res
         .status(400)
         .json(
           `Asset is already assigned to ${checkifAssetIsAlreadyAssigned.staff}`
         );
+    }
 
-    const history = await AssetAssignmentHistory.create({
-      assetId: assetToAssign._id,
-      staffId,
-      staffName,
-      assginedOn: new Date().toISOString(),
-      institutionId: req.institutionId,
+    const history = await prisma.assetAssignmentHistory.create({
+      data: {
+        assetId: assetToAssign.id,
+        staffId,
+        staffName,
+        assginedOn: new Date().toISOString(),
+        institutionId: req.institutionId,
+      },
     });
 
-    assetToAssign.assignedTo = {
-      staff: `${staffName} (${staffId})`,
-      assignmentId: history.id,
-    };
-    const result = await assetToAssign.save();
+    await prisma.institutionAsset.update({
+      where: { id: assetToAssign.id },
+      data: {
+        assignedTo: {
+          staff: `${staffName} (${staffId})`,
+          assignmentId: history.id,
+        },
+      },
+    });
 
-    if (history && result) {
+    if (history) {
       res.status(200).json('Asset Assigned Successfully');
     }
   } catch (error) {
@@ -146,23 +168,30 @@ const assignAsset = async (req, res) => {
 
 const unAssignAsset = async (req, res) => {
   try {
-    const assetToMakeAvailable = await InstitutionAsset.findOne({
-      _id: req.params.id,
-      owner: req.institutionId,
+    const assetToMakeAvailable = await prisma.institutionAsset.findFirst({
+      where: {
+        id: req.params.id,
+        ownerId: req.institutionId,
+      },
     });
 
     if (!assetToMakeAvailable) return res.status(404).json('No asset found');
-    const history = await AssetAssignmentHistory.findById(
-      assetToMakeAvailable.assignedTo.assignmentId
-    );
+    const assignmentId = assetToMakeAvailable.assignedTo?.assignmentId;
+    if (!assignmentId) return res.status(404).json('No assignment history found');
+    const history = await prisma.assetAssignmentHistory.findUnique({
+      where: { id: assignmentId },
+    });
 
     if (!history) return res.status(404).json('No assignment history found');
 
-    history.unAssignedOn = new Date().toISOString();
-    assetToMakeAvailable.assignedTo = { staffName: '' };
-
-    const historyResult = await history.save();
-    const assetToMakeAvailableResult = await assetToMakeAvailable.save();
+    const historyResult = await prisma.assetAssignmentHistory.update({
+      where: { id: history.id },
+      data: { unAssignedOn: new Date().toISOString() },
+    });
+    const assetToMakeAvailableResult = await prisma.institutionAsset.update({
+      where: { id: assetToMakeAvailable.id },
+      data: { assignedTo: { staffName: '' } },
+    });
 
     if (historyResult && assetToMakeAvailableResult) {
       res.status(200).json('Asset Unassigned Successfully');
@@ -176,54 +205,30 @@ const getAssetAssignmentHistory = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
   let pageNumber = req.query?.pageNumber * 1 || 1;
   let search = req.query?.search || '';
-  const institutionId = new mongoose.Types.ObjectId(req.institutionId);
 
   try {
-    const countPipeline = [
-      {
-        $match: {
-          institutionId,
-          $or: [
-            { staffId: { $regex: new RegExp(search, 'i') } },
-            { staffName: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $count: 'total' },
-    ];
-
-    const countResult = await AssetAssignmentHistory.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No history found');
-    }
-
-    const total = countResult[0].total;
+    const where = {
+      institutionId: req.institutionId,
+      OR: [
+        { staffId: { contains: search, mode: 'insensitive' } },
+        { staffName: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+    const total = await prisma.assetAssignmentHistory.count({ where });
+    if (!total) return res.status(404).json('No history found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
 
-    const retrievalPipeline = [
-      {
-        $match: {
-          institutionId,
-          $or: [
-            { staffId: { $regex: new RegExp(search, 'i') } },
-            { staffName: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-    const results = await AssetAssignmentHistory.aggregate(retrievalPipeline);
-
-    if (!results) {
-      return res.status(404).json('No history found');
-    }
+    const results = await prisma.assetAssignmentHistory.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No history found');
 
     const totalPages = Math.ceil(total / pageSize);
 
@@ -240,10 +245,12 @@ const getAssetAssignmentHistory = async (req, res) => {
 
 const getSingleAsset = async (req, res) => {
   try {
-    const asset = await InstitutionAsset.findById(req.params.id);
+    const asset = await prisma.institutionAsset.findUnique({
+      where: { id: req.params.id },
+    });
     if (!asset) return res.status(404).json('No asset found');
-    if (req.institutionId === asset.owner.toString()) {
-      res.status(200).json(asset);
+    if (req.institutionId === asset.ownerId) {
+      res.status(200).json(mapInstitutionAssetForResponse(asset));
     } else {
       res.status(401).json('Unauthorized');
     }
@@ -253,41 +260,20 @@ const getSingleAsset = async (req, res) => {
 };
 
 const getBrands = async (req, res) => {
-  const institutionId = new mongoose.Types.ObjectId(req.institutionId);
   try {
-    const pipeline = [
-      {
-        $match: {
-          owner: institutionId,
-        },
-      },
-      {
-        $group: {
-          _id: '$brand',
-          models: { $addToSet: '$model' },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          brand: '$_id',
-          models: 1,
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          brandModelPairs: { $push: { k: '$brand', v: '$models' } },
-        },
-      },
-      {
-        $replaceRoot: { newRoot: { $arrayToObject: '$brandModelPairs' } },
-      },
-    ];
-
-    const result = await InstitutionAsset.aggregate(pipeline);
-
-    res.status(200).json(result[0]);
+    const assets = await prisma.institutionAsset.findMany({
+      where: { ownerId: req.institutionId },
+      select: { brand: true, model: true },
+    });
+    const grouped = {};
+    assets.forEach(asset => {
+      if (!asset.brand) return;
+      if (!grouped[asset.brand]) grouped[asset.brand] = [];
+      if (asset.model && !grouped[asset.brand].includes(asset.model)) {
+        grouped[asset.brand].push(asset.model);
+      }
+    });
+    res.status(200).json(grouped);
   } catch (error) {
     res.status(500).json('Internal Server Error');
   }
@@ -297,57 +283,31 @@ const getSelectedAssetsAssignmentHistory = async (req, res) => {
   let pageSize = req.query?.pageSize * 1 || 10;
   let pageNumber = req.query?.pageNumber * 1 || 1;
   let search = req.query?.search || '';
-  const institutionId = new mongoose.Types.ObjectId(req.institutionId);
-  const assetId = new mongoose.Types.ObjectId(req.params.id);
 
   try {
-    const countPipeline = [
-      {
-        $match: {
-          institutionId,
-          assetId,
-          $or: [
-            { staffId: { $regex: new RegExp(search, 'i') } },
-            { staffName: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $count: 'total' },
-    ];
-
-    const countResult = await AssetAssignmentHistory.aggregate(countPipeline);
-
-    if (!countResult[0]) {
-      return res.status(404).json('No history found');
-    }
-
-    const total = countResult[0].total;
+    const where = {
+      institutionId: req.institutionId,
+      assetId: req.params.id,
+      OR: [
+        { staffId: { contains: search, mode: 'insensitive' } },
+        { staffName: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+    const total = await prisma.assetAssignmentHistory.count({ where });
+    if (!total) return res.status(404).json('No history found');
 
     if (total < pageSize) {
       pageSize = total;
       pageNumber = 1;
     }
 
-    const retrievalPipeline = [
-      {
-        $match: {
-          institutionId,
-          assetId,
-          $or: [
-            { staffId: { $regex: new RegExp(search, 'i') } },
-            { staffName: { $regex: new RegExp(search, 'i') } },
-          ],
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $skip: pageSize * (pageNumber - 1) },
-      { $limit: pageSize },
-    ];
-    const results = await AssetAssignmentHistory.aggregate(retrievalPipeline);
-
-    if (!results) {
-      return res.status(404).json('No history found');
-    }
+    const results = await prisma.assetAssignmentHistory.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: pageSize * (pageNumber - 1),
+      take: pageSize,
+    });
+    if (!results.length) return res.status(404).json('No history found');
 
     const totalPages = Math.ceil(total / pageSize);
 
@@ -363,40 +323,16 @@ const getSelectedAssetsAssignmentHistory = async (req, res) => {
 };
 
 const getStats = async (req, res) => {
-  const institutionId = new mongoose.Types.ObjectId(req.institutionId);
-
   try {
-    const totalAssetCountPipeline = [
-      {
-        $match: {
-          owner: institutionId,
-        },
+    const totalAssetCount = await prisma.institutionAsset.count({
+      where: { ownerId: req.institutionId },
+    });
+    const totalUnassignedAssetCount = await prisma.institutionAsset.count({
+      where: {
+        ownerId: req.institutionId,
+        assignedTo: { path: ['staffName'], equals: '' },
       },
-      { $count: 'total' },
-    ];
-
-    const totalAssetCountResult = await InstitutionAsset.aggregate(
-      totalAssetCountPipeline
-    );
-
-    const totalAssetCount = totalAssetCountResult[0]?.total || 0;
-
-    const totalUnassignedAssetCountPipeline = [
-      {
-        $match: {
-          owner: institutionId,
-          assignedTo: { staffName: '' },
-        },
-      },
-      { $count: 'total' },
-    ];
-
-    const totalUnassignedAssetCountResult = await InstitutionAsset.aggregate(
-      totalUnassignedAssetCountPipeline
-    );
-
-    const totalUnassignedAssetCount =
-      totalUnassignedAssetCountResult[0]?.total || 0;
+    });
 
     const totalAssigned = totalAssetCount - totalUnassignedAssetCount;
 
