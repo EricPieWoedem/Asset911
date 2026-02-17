@@ -6,16 +6,6 @@ import prisma from './prisma';
 const serverSessionRouter = Router();
 
 serverSessionRouter.get('/get-auth', (req: Request, res: Response) => {
-  if (process.env.BYPASS_AUTH === 'true') {
-    return res.status(200).json({
-      name: 'Dev User',
-      email: 'dev@user.com',
-      permissions: [],
-      institutionName: null,
-      accessToken: 'dev-bypass-token',
-      ghanaCardNumber: 'GHA-123456789-0',
-    });
-  }
   const bearer = req.headers.authorization || req.headers.Authorization;
   if (!bearer) return res.status(401).json('Authorization header missing');
   const accessToken = (bearer as string).split(' ')[1];

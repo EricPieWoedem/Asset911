@@ -33,15 +33,6 @@ export const createToken = (user: UserPayload) => {
 };
 
 export const verifyToken = (req: Request, res: Response, next: NextFunction) => {
-  if (process.env.BYPASS_AUTH === 'true') {
-    (req as Request & { userId: string; user: object }).userId = 'dev-user-id';
-    (req as Request & { user: object }).user = {
-      id: 'dev-user-id',
-      name: 'Dev User',
-      email: 'dev@user.com',
-    };
-    return next();
-  }
   const bearer = req.headers.authorization || req.headers.Authorization;
   if (!bearer) return res.status(401).json({ message: 'Authorization header missing' });
   const accessToken = (bearer as string).split(' ')[1];
@@ -89,19 +80,6 @@ export const createTokenWithPermissions = (admin: AdminPayload & { institutionId
 };
 
 export const verifyTokenWithPermissions = (req: Request, res: Response, next: NextFunction) => {
-  if (process.env.BYPASS_AUTH === 'true') {
-    (req as Request & { userId: string; permissions: number[]; institutionId: string; user: object }).userId = 'dev-admin-id';
-    (req as Request & { permissions: number[] }).permissions = [201, 302, 203];
-    (req as Request & { institutionId: string }).institutionId = 'dev-institution-id';
-    (req as Request & { user: object }).user = {
-      id: 'dev-admin-id',
-      name: 'Dev Admin',
-      email: 'dev@admin.com',
-      permissions: [201, 302, 203],
-      institutionId: 'dev-institution-id',
-    };
-    return next();
-  }
   const bearer = req.headers.authorization || req.headers.Authorization;
   if (!bearer) return res.status(401).json('Authorization header missing');
   const accessToken = (bearer as string).split(' ')[1];

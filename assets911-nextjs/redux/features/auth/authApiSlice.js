@@ -38,54 +38,6 @@ const authApiSlice = apiSlice.injectEndpoints({
         url: '/server-session/get-auth',
       }),
       providesTags: ['User'],
-      // DEV MODE BYPASS: Return mock data when bypass is enabled
-      async queryFn(arg, api, extraOptions, baseQuery) {
-        if (process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true') {
-          // Return mock user data based on current path
-          const pathName = typeof window !== 'undefined' ? window.location.pathname : '';
-          let mockData;
-          
-          if (pathName.includes('institution') && pathName.includes('ecfatum')) {
-            mockData = {
-              name: 'Dev ECFATUM Admin',
-              email: 'dev@ecfatum.com',
-              permissions: [201, 203],
-              institutionName: { id: 'ecfatum', name: 'ECFATUM' },
-              accessToken: 'dev-bypass-token',
-            };
-          } else if (pathName.includes('institution')) {
-            mockData = {
-              name: 'Dev Institution Admin',
-              email: 'dev@institution.com',
-              permissions: [302],
-              institutionName: { id: 'institution', name: 'Test Institution' },
-              accessToken: 'dev-bypass-token',
-            };
-          } else if (pathName.includes('police')) {
-            mockData = {
-              name: 'Dev Police Officer',
-              email: 'dev@police.com',
-              permissions: [],
-              institutionName: { id: 'police', name: 'Police' },
-              accessToken: 'dev-bypass-token',
-            };
-          } else {
-            mockData = {
-              name: 'Dev User',
-              email: 'dev@user.com',
-              permissions: [],
-              institutionName: null,
-              accessToken: 'dev-bypass-token',
-              ghanaCardNumber: 'GHA-123456789-0',
-            };
-          }
-          
-          return { data: mockData };
-        }
-        
-        // Normal flow: call the actual API
-        return baseQuery({ url: '/server-session/get-auth' });
-      },
     }),
     loginInstitutionAdmin: builder.mutation({
       query: credentials => ({
