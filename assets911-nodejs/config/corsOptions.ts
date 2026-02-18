@@ -7,7 +7,10 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  origin: (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) => {
     if (allowedOrigins.indexOf(origin ?? '') !== -1 || !origin) {
       callback(null, true);
     } else {
